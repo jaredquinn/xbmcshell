@@ -17,7 +17,6 @@ class customparse(argparse.ArgumentParser):
 
 class xbmcShell(cmd.Cmd,object):
 	"XBMC Shell"
-	commands = 'volume', 'ping', 'version', 'mute', 'unmute'
 
 	ARGS_COUNT = -1
 	ARGS_CORRECT = 0
@@ -38,10 +37,19 @@ class xbmcShell(cmd.Cmd,object):
 		print self._hist
 
 	def do_ping(self, s):
-		print 'Ping $value'.Template( self.xbmc.JSONRPC.Ping() )
+		"""Usage: ping 
+
+Ping XBMC server to test connection 
+"""
+		print 'Ping %s' % self.xbmc.JSONRPC.Ping()
 
 	def do_version(self, s):
-		print 'Version: $version'.Template( self.xbmc.JSONRPC.Version() )
+		"""Usage: version
+
+Display JSON-RPC version information
+"""
+		data = self.xbmc.JSONRPC.Version()
+		print 'JSON-RPC Interface version %s' % data.get('version')
 
 	def do_volume(self, s):
 		" get or set volume "
@@ -61,15 +69,21 @@ class xbmcShell(cmd.Cmd,object):
 		print 'Volume: %s %s' % ( data.get('volume'), muted )
 
 	def do_listplayers(self, s):
+		"""Usage: listplayers
+
+List currently active XBMC players
+"""
 		data = self.xbmc.Player.GetActivePlayers()
 		for p in data:
 			print " %1d: %s" % ( p["playerid"], p["type"] )
 
 	def do_playerproperties(self, s):
+		" get player properties "
 		data = self.xbmc.Player.GetProperties({ 'playerid': int(s), 'properties': [ ] })
 		print "%s" % data
 
 	def do_inspect(self, s):
+		" inspect data "
 		opt = { 'getdescriptions': True, 'getmetadata': True }
 		data = self.xbmc.JSONRPC.Introspect( opt )
 		args = s.split()
@@ -87,25 +101,42 @@ class xbmcShell(cmd.Cmd,object):
 				print "	 %s " % p
 		
 	def do_currentitem(self, s):
-		data = self.xbmc.Player.GetItem({ 'playerid': int(s), 'properties': [ 'albumartist', 'tvshowid', 'duration', 'album', 'season', 'albumid', 'track', 'imdbnumber', 'musicbrainztrackid', 'episode', 'showlink', 'showtitle', 'country', 'premiered', 'firstaired', 'tagline', 'artistid', 'mpaa' ] })
-		#{"item":{"id":3254,"label":"08. Engaged (1)","type":"episode"}}}
+		"""Usage: currentitem <player_id>
+
+Retrieve information on the currently active item on the specified player.
+"""
+		if s:
+			data = self.xbmc.Player.GetItem({ 'playerid': int(s), 'properties': [ 'albumartist', 'tvshowid', 'duration', 'album', 'season', 'albumid', 'track', 'imdbnumber', 'musicbrainztrackid', 'episode', 'showlink', 'showtitle', 'country', 'premiered', 'firstaired', 'tagline', 'artistid', 'mpaa' ] })
+		else:
+			self.do_help('currentitem')
+			return
+
 		item = data.get('item')
-		print "ID: %s [%s] (%s)" % ( item['id'], item['tvshowid'], item['type'] )
-		print "Title: %s (Season %s)" % ( item['showtitle'], item['season'] )
-		print "Label: %s" % item['label']
-		print "Rating: %s" % item['mpaa']
-		print "First Aired: %s" % item['firstaired']
-		print "Tagline: %s" % item['tagline']
-		print "IMDB: %s" % item['imdbnumber']
+		if item['type'] == 'picture':
+			print 'Type: %s' % item['type']
+			print 'Country: %s' % item['country']
+			print 'Label: %s' % item['label']
+
+		if item['type'] == 'episode':
+			print "ID: %s [%s] (%s)" % ( item['id'], item['tvshowid'], item['type'] )
+			print "Title: %s (Season %s)" % ( item['showtitle'], item['season'] )
+			print "Label: %s" % item['label']
+			print "Rating: %s" % item['mpaa']
+			print "First Aired: %s" % item['firstaired']
+			print "Tagline: %s" % item['tagline']
+			print "IMDB: %s" % item['imdbnumber']
 
 	def do_shutdown(self, s):
+		" shutdown XBMC "
 		self.xbmc.Application.Quit()
 
 	def do_mute(self, s):
+		" mute XBMC "
 		self.xbmc.Application.SetMute({ 'mute': True })
 		self.do_volume('')
 
 	def do_unmute(self, s):
+		" unmute XBMC "
 		self.xbmc.Application.SetMute({ 'mute': False})
 		self.do_volume('')
 

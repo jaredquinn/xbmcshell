@@ -1,2 +1,6 @@
 xbmcshell
 A simple JSON-RPC shell interface for XBMC (in development)
+
+The more interesting part of this package is located in lib/xbmcclient.py which is
+a Python JSON-RPC implementation designed for XBMC
+
