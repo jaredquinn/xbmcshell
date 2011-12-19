@@ -1,0 +1,51 @@
+#!/usr/bin/python
+import curses
+import urllib, urllib2
+import base64
+
+hostname = "localhost"
+port =  "8080"
+username = "xbmc"
+password = "xbmc"
+
+if port != '':
+	hostname = hostname + ":" + port
+
+def sendKey(key):
+	baseUrl = "http://" + hostname + "/xbmcCmds/xbmcHttp?command=SendKey(" + key + ")"
+	req = urllib2.Request(baseUrl)
+	if password != '':
+		base64string = base64.encodestring('%s:%s' % (username, password))[:-1]
+		authheader =  "Basic %s" % base64string
+		req.add_header("Authorization", authheader)
+		
+	handle = urllib2.urlopen(req, timeout=10)
+	handle.close()		
+
+stdscr = curses.initscr()
+curses.noecho()
+curses.cbreak()
+stdscr.keypad(1)
+
+try: # in case you ever want to leave, ctrl+c
+	while True:
+		letter = stdscr.getch()
+		if letter < 256:
+			if letter == 10:
+				letter = 13
+#			elif letter == 127:
+#				letter = 8
+			sendKey(hex(0xf100+int(letter)))
+		elif letter == curses.KEY_UP:
+			sendKey(hex(270))	
+		elif letter == curses.KEY_DOWN:
+			sendKey(hex(271))	
+		elif letter == curses.KEY_LEFT:
+			sendKey(hex(272))
+		elif letter == curses.KEY_RIGHT:
+			sendKey(hex(273))
+except: # will clean up for curses
+	curses.nocbreak()
+	stdscr.keypad(0)
+	curses.echo()
+	curses.endwin()

@@ -1,0 +1,131 @@
+#!/usr/bin/env python
+
+import cmd
+import argparse
+import plac
+import logging
+import sys
+
+sys.path.append("./lib")
+from xbmcremote import xbmcremote
+
+class customparse(argparse.ArgumentParser):
+	def exit(self, status=0, message=None):
+		if message:
+			self._print_message(message, sys.stderr)
+
+
+class xbmcShell(cmd.Cmd,object):
+	"XBMC Shell"
+	commands = 'volume', 'ping', 'version', 'mute', 'unmute'
+
+	ARGS_COUNT = -1
+	ARGS_CORRECT = 0
+	ARGS_TYPE = -2
+
+	def __init__(self, param = None):
+		self.xbmc = xbmcremote('http://localhost:8080/jsonrpc')
+		self.prompt = "xbmc=> "
+		cmd.Cmd.__init__(self)
+
+	def do_exit(self, s):
+		return -1
+
+	def do_EOF(self, s):
+		return self.do_exit(s)
+
+	def do_history(self):
+		print self._hist
+
+	def do_ping(self, s):
+		print 'Ping $value'.Template( self.xbmc.JSONRPC.Ping() )
+
+	def do_version(self, s):
+		print 'Version: $version'.Template( self.xbmc.JSONRPC.Version() )
+
+	def do_volume(self, s):
+		" get or set volume "
+		parser = customparse(description='set or retrieve the volume', prog='volume', add_help=False)
+		parser.add_argument('volume', metavar='volume', nargs='?', type=int, choices=range(0, 101), help='Volume in percentage [0..100]')
+		parser.add_argument('-h', '--help', action='help', help='Show this help')
+		args = parser.parse_known_args(s.split())
+		if(args == None):
+			print '*** usage: volume [-h] [0-100]'
+			return
+
+		if args[0].volume != None:
+			data = self.xbmc.Application.SetVolume({ 'volume': int(s) })
+		
+		data = self.xbmc.Application.GetProperties({ 'properties': [ 'volume', 'muted' ] })
+		muted = '' if data.get('muted') == False else 'Mute'
+		print 'Volume: %s %s' % ( data.get('volume'), muted )
+
+	def do_listplayers(self, s):
+		data = self.xbmc.Player.GetActivePlayers()
+		for p in data:
+			print " %1d: %s" % ( p["playerid"], p["type"] )
+
+	def do_playerproperties(self, s):
+		data = self.xbmc.Player.GetProperties({ 'playerid': int(s), 'properties': [ ] })
+		print "%s" % data
+
+	def do_inspect(self, s):
+		opt = { 'getdescriptions': True, 'getmetadata': True }
+		data = self.xbmc.JSONRPC.Introspect( opt )
+		args = s.split()
+		d = data
+
+		if s != "":
+			for a in args:
+				d = d[ a ]
+
+		if len(args) > 1:
+			for p in d:
+				print "  %-30s = %s" % ( p, d[p] )
+		else:
+			for p in d:
+				print "	 %s " % p
+		
+	def do_currentitem(self, s):
+		data = self.xbmc.Player.GetItem({ 'playerid': int(s), 'properties': [ 'albumartist', 'tvshowid', 'duration', 'album', 'season', 'albumid', 'track', 'imdbnumber', 'musicbrainztrackid', 'episode', 'showlink', 'showtitle', 'country', 'premiered', 'firstaired', 'tagline', 'artistid', 'mpaa' ] })
+		#{"item":{"id":3254,"label":"08. Engaged (1)","type":"episode"}}}
+		item = data.get('item')
+		print "ID: %s [%s] (%s)" % ( item['id'], item['tvshowid'], item['type'] )
+		print "Title: %s (Season %s)" % ( item['showtitle'], item['season'] )
+		print "Label: %s" % item['label']
+		print "Rating: %s" % item['mpaa']
+		print "First Aired: %s" % item['firstaired']
+		print "Tagline: %s" % item['tagline']
+		print "IMDB: %s" % item['imdbnumber']
+
+	def do_shutdown(self, s):
+		self.xbmc.Application.Quit()
+
+	def do_mute(self, s):
+		self.xbmc.Application.SetMute({ 'mute': True })
+		self.do_volume('')
+
+	def do_unmute(self, s):
+		self.xbmc.Application.SetMute({ 'mute': False})
+		self.do_volume('')
+
+
+def _setupLogger():
+	logger = logging.getLogger('xbmcremote')
+	logger.setLevel(logging.INFO)
+	ch = logging.StreamHandler()
+	ch.setLevel(logging.INFO)
+	formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+	ch.setFormatter(formatter)
+	logger.addHandler(ch)
+	logger.debug('Initializing...')
+
+if __name__ == '__main__':
+	__PROGRAM_NAME__=sys.argv[0]
+	_setupLogger()
+#	plac.Interpreter( plac.call( xbmcShell ) ).interact()
+
+	shell = xbmcShell()
+	shell.cmdloop() 
+
+
