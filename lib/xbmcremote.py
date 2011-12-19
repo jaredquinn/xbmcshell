@@ -64,13 +64,6 @@ class xbmcrpcinterface(xbmcremote):
 		xbmcremote.__init__(self, parent.url)
 		self.name = name
 		self.use = 'method'
-		#self.name = name
-#		#self.url = parent.url
-#
-#	def __getattr__(self, method):
-##		if method.startswith('_'):
-#			raise AttributeError(method)
-#		return xbmcrpcmethod(self, method)
 
 class xbmcrpcmethod:
 
