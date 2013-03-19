@@ -2,7 +2,7 @@ xbmcshell
 
 Vastly updated xbmcshell utility compatible with XBMC 12.0 Frodo
 
-It conntains a dynamic hirearchical object space used to dynamically map
+It contains a dynamic hirearchical object space used to dynamically map
 to XBMC API 6.0 api calls.
 
 A master xbmcrpc class provides a container object for xbmcrpc interface
