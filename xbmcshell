@@ -365,12 +365,12 @@ class xbmcShell():
 		print 'Volume: %s %s' % ( data.get('volume'), muted )
 
 	def mute(self):
-		" Mute XBMC
+		" Mute XBMC "
 		self.xbmc.Application.SetMute({ 'mute': True })
 		return self.volume(None)
 
 	def unmute(self):
-		" Unmute XBMC
+		" Unmute XBMC "
 		self.xbmc.Application.SetMute({ 'mute': False})
 		return self.volume(None)
 
