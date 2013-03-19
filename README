@@ -1,10 +1,19 @@
 xbmcshell
-A simple JSON-RPC library and shell interface for XBMC (in development)
 
-The more interesting part of this package is located in lib/xbmcremote.py which is
-a Python JSON-RPC implementation designed for XBMC
+Vastly updated xbmcshell utility compatible with XBMC 12.0 Frodo
 
-Note:
+It conntains a dynamic hirearchical object space used to dynamically map
+to XBMC API 6.0 api calls.
 
-This repository contains other code from Team XBMC, with an ultimate plan to include
-some event handling within the same utility.
+A master xbmcrpc class provides a container object for xbmcrpc interface
+classes which are containers for xbmc method calls.
+
+e.g. xbmc.Application maps directly to API calls of Application.*
+
+No introspection or checking of calls is performed, making the API 
+interface compatible with all XBMC changes, however code calling the
+API may need to be modified.
+
+A basic keyboard and other controls are also provided through the 
+command line interface.
+

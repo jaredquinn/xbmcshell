@@ -1,148 +1,382 @@
 #!/usr/bin/env python
-
+import json, urllib, urllib2, uuid, sys, logging, string 
 import cmd
 import argparse
 import plac
-import logging
-import sys
+import tty
+import termios
+import os
+from time import clock, time
 
-sys.path.append("./lib")
-from xbmcremote import xbmcremote
+# Base XBMC RPC wrapper class 
+class xbmcrpc:
+
+	def __init__(self, url):
+		self.url = url
+		self.wait = False
+
+	def __getattr__(self, interface):
+		if interface == '_wrapper':
+			return xbmcwrapper(self)
+
+		if interface.startswith('_'):
+			raise AttributeError(interface)
+
+		return xbmcrpcinterface(self, interface)
+
+# Middle Level XBMC Interface Class
+class xbmcrpcinterface:
+	
+	def __init__(self, parent, name):
+		self.name = name
+		self.url = parent.url
+		self.wait = parent.wait
+
+	def __getattr__(self, method):
+		if method.startswith('_'):
+			raise AttributeError(method)
+		return xbmcrpcmethod(self, method)
+
+# Method Level XBMC Interface Class
+# Handles direct Interface with the JSON RPC interface
+#
+# Calls are passed through dynamically based on the Python call.
+class xbmcrpcmethod:
+
+	def __init__(self, parent, name):
+		self.name = name
+		self.parent = parent
+		self.url = parent.url
+		self.wait = parent.wait
+		self.logger = logging.getLogger('xbmcshell')
+
+	# Default call method
+	# Used when triggering the dynamic xbmc.Interface.Method() calls
+	def __call__(self, args = None, filt = None, sort = None, limit = None):
+
+		# Initialise a URL opener
+		opener = urllib2.build_opener(urllib2.HTTPHandler())
+
+		if args == None:
+			args = { }
+
+		# HTTP Headers
+		headers = {'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/json'}
+
+		# Request Arguments
+		dataObject = {
+			'jsonrpc': '2.0',
+			'method': '%s.%s' % (self.parent.name, self.name),
+			'params': args,
+			'id': '%s.%s' % ( self.parent.name, self.name )
+		}
+
+		# Format JSON Request
+		jsondata = json.dumps(dataObject)
+		self.logger.debug('jsondata: %s' % jsondata)
+
+		# Make Request
+		request = urllib2.Request(self.url, jsondata, headers)
+		result = None
+
+		try:
+			# Set timeout based on if we care about a result or not.
+			# Some issues exist in some themes causing the shutdown menu to
+			# trap and block.
+			tt = 5 if self.wait else .2
+			response = opener.open(request, timeout=tt)
+			if self.wait: return
+
+			# Read response
+			content = response.read(response)
+			self.logger.debug('response: %s' % content)
+			# Convert to mixed object 
+			jdata = json.loads(content)
+
+			if jdata:
+				result = jdata.get('result')
+				error = jdata.get('error')
+
+		except Exception, e:
+			if self.wait:
+				print 'xbmc:json-rpc error: %s' % str(e)
+				sys.exit(-1)
+
+		return result
+
 
 class customparse(argparse.ArgumentParser):
+
 	def exit(self, status=0, message=None):
 		if message:
 			self._print_message(message, sys.stderr)
 
 
-class xbmcShell(cmd.Cmd,object):
-	"XBMC Shell"
+class xbmcShell():
+	# List of functions available from the command line
+	commands = 'volume', 'ping', 'version', 'keyboard', 'playlist', 'next', 'prev', 'mute', 'unmute', 'stop', 'play', 'pause', 'seek'
 
-	ARGS_COUNT = -1
-	ARGS_CORRECT = 0
-	ARGS_TYPE = -2
+	def __init__(self):
+		# Initialise the xbmcShell using the XBMC_HOST environment variable or localhost.
+		self.host = os.getenv('XBMC_HOST', 'localhost')
+		self.xbmc = xbmcrpc('http://%s:8080/jsonrpc' % self.host)
+		print "xbmcShell v0.01 (xbmc on %s)" % self.host
 
-	def __init__(self, param = None):
-		self.xbmc = xbmcremote('http://localhost:8080/jsonrpc')
-		self.prompt = "xbmc=> "
-		cmd.Cmd.__init__(self)
+	#######################################
+	# Internal functions
+	#######################################
 
-	def do_exit(self, s):
-		return -1
+	# Internal function to get the currently active player
+	def _getCurrentPlayer(self, playerType = None):
+		activeplayers = self.xbmc.Player.GetActivePlayers()
+		for player in activeplayers:
+			return player
+		return None
 
-	def do_EOF(self, s):
-		return self.do_exit(s)
+	# Internal function to get the current playlist from the currently active player
+	def _getCurrentPlaylist(self):
+			player = self._getCurrentPlayer()
 
-	def do_history(self):
-		print self._hist
+			if player != None:
+				currentplaylist = self.xbmc.Player.GetProperties({ 'playerid': player['playerid'], 'properties': [ "playlistid", "percentage", "position" ] })
+				currentplaylist['playerid'] = player['playerid']
+				return currentplaylist
+			else:
+				return None
 
-	def do_ping(self, s):
-		"""Usage: ping 
+	# Render a playlist for a user from playlist data
+	def _renderPlaylist(self, playlist):
+		ic = 0
 
-Ping XBMC server to test connection 
-"""
-		print 'Ping %s' % self.xbmc.JSONRPC.Ping()
+		if playlist['position'] == -1:
+			items = [  self.xbmc.Player.GetItem({ 'playerid': 	playlist['playerid'] }).get('item') ]
+		else:
+			items = self.xbmc.Playlist.GetItems({ 'playlistid': playlist['playlistid'] }).get('items')
 
-	def do_version(self, s):
-		"""Usage: version
+		for item in items:
+			cs = cp = ''
+			if ic == playlist['position'] or playlist['position'] == -1:
+				cp = "%2d%%" % playlist['percentage']
+				cs = '*'
 
-Display JSON-RPC version information
-"""
-		data = self.xbmc.JSONRPC.Version()
-		print 'JSON-RPC Interface version %s' % data.get('version')
+			print "%1s%3d %3.3s %-30s %2s" % ( cs , ic+1, item['type'], item['label'], cp )
+			ic = ic + 1
 
-	def do_volume(self, s):
-		" get or set volume "
-		parser = customparse(description='set or retrieve the volume', prog='volume', add_help=False)
-		parser.add_argument('volume', metavar='volume', nargs='?', type=int, choices=range(0, 101), help='Volume in percentage [0..100]')
-		parser.add_argument('-h', '--help', action='help', help='Show this help')
-		args = parser.parse_known_args(s.split())
-		if(args == None):
-			print '*** usage: volume [-h] [0-100]'
-			return
 
-		if args[0].volume != None:
-			data = self.xbmc.Application.SetVolume({ 'volume': int(s) })
+	############################
+	# CLI Functions
+	############################
+
+	def ping(self):
+		" Ping the XBMC Server "
+
+		cb = time()
+		p = self.xbmc.JSONRPC.Ping()
+		if p != 'pong':
+			print "Unexpected result: %s" % p
+		else:
+			ca = time()
+			print "XBMC responded with \"%s\" from %s in %f milliseconds" % ( p, self.host, (ca - cb) * 1000 )
+
+
+	def version(self):
+		" Display version numbers or XBMC, API and xbmcShell "
+
+		print "xbmcShell v %s" % __PROGRAM_VER__
+
+		a = self.xbmc.Application.GetProperties({'properties': ['version']})
+		if a != None:
+			print "XBMC on %s version %s.%s (%s) rev %s" % ( self.host, a['version']['major'], a['version']['minor'], a['version']['tag'], a['version']['revision'] )
+
+		v = self.xbmc.JSONRPC.Version()
+		if v != None:
+			print "API %d.%d.%d" % ( v['version']['major'], v['version']['minor'], v['version']['patch'] )
+
+	def playlist(self):
+		" List the current playlist for the currently playing player "
+
+		playlist = self._getCurrentPlaylist()
+		if playlist != None:
+			self._renderPlaylist(playlist)
+		else:
+			print "No current player or playlist to query"
+
+	def pause(self):
+		" Pause the currently playing player "
+		cp = self._getCurrentPlayer()
+		if cp != None:
+			r = self.xbmc.Player.PlayPause({ 'playerid': cp['playerid'] })
+			print "Playspeed: %s" % r['speed']
+		else:
+			print "No current player to play/pause"
+
+	def play(self):
+		" Play the currently active player - oxymoron and currently broken "
+		cp = self._getCurrentPlayer()
+		if cp != None:
+			r = self.xbmc.Player.PlayPause({ 'playerid': cp['playerid'], 'play': True })
+			print "Playspeed: %s" % r['speed']
+		else:
+			print "No current player to play"
+
+	def stop(self):
+		" Stop the currently active player "
+		cp = self._getCurrentPlayer()
+		if cp != None:
+			# Unfortunately XBMC returns None when stopping anything, anytime.
+			# Almost useless, but we allow the user to try anyway.
+			r = self.xbmc.Player.Stop({ 'playerid': cp['playerid'] })
+			print "Stop Sent.  XBMC doesnt tell me if it worked!"
+
+	def seek(self, direction, jump = 'small'):
+		""" seeks in the currently playing item 
+
+ direction of "forward" (fwd) or "backward" (back) must be specified
+ jump may be specified "small" (short) jumps 30 seconds and "large" (big) of 10 minnutes """
+
+		if direction == 'fwd' or direction == 'forward':
+			shortform = 'forward'
+		elif direction == 'backward' or direction == 'back':
+			shortform = 'backward'
+		else:
+			print "Usage: seek (fwd|forward|backward|back) [small|short|large|big]\n"
+			return None
+
+		if jump == 'small' or jump == 'short':
+			shortform = 'small%s' % shortform
+		elif jump == 'big' or jump == 'large':
+			shortform = 'big%s' % shortform
+		else:
+			print "Usage: seek (fwd|forward|backward|back) [small|short|large|big]\n"
+			return None
+
+		cp = self._getCurrentPlayer()
+		if cp != None:
+			r = self.xbmc.Player.Seek({ 'playerid': cp['playerid'], 'value': shortform })
+			print "Position: %02d:%02d:%02d.%03d (%02d \%)" % ( r['time']['hours'], r['time']['minutes'], r['time']['seconds'], r['time']['milliseconds'], r['percentage'] )
+			print "Total   : %02d:%02d:%02d.%03d" % ( r['totaltime']['hours'], r['totaltime']['minutes'], r['totaltime']['seconds'], r['totaltime']['milliseconds'] )
+		else:
+			print "No current player to seek within"
+
+
+	def next(self):
+		" next to next item in current playlist "
+		cp = self._getCurrentPlayer()
+		if cp != None:
+			self.xbmc.Player.GoTo({ 'playerid': cp['playerid'], 'to': 'next' })
+		else:
+			print "No Next Item in Playlist"
+
+
+	def prev(self):
+		" jump to previous item in current playlist "
+		cp = self._getCurrentPlayer()
+		if cp != None:
+			print "%s" % cp
+			self.xbmc.Player.GoTo({ 'playerid': cp['playerid'], 'to': 'previous' })
+		else:
+			print "No Previous Item in Playlist"
+
+
+	def keyboard(self):
+		" initiate a remote keyboard with special powers (adjusts according to xbmc state) "
+
+		fd = sys.stdin.fileno()
+		newState = termios.tcgetattr(fd)
+		currentState = termios.tcgetattr(fd)
+		newState[3] = newState[3] & ~termios.ICANON & ~termios.ECHO
+		newState[6][termios.VMIN] = 1
+		newState[6][termios.VTIME] = 0
+
+		termios.tcsetattr(fd, termios.TCSANOW, newState)
+
+		print "Remote Control Enabled.  Press Ctrl-C to exit.\n"
+
+		logger = logging.getLogger('xbmcshell')
+		self.xbmc.GUI.ShowNotification({ 'title': 'XBMCShell', 'message': 'XBMCShell is now controlling XBMC' })
+
+		try:
+			while True:
+				keys = os.read(fd, 4)
+
+				if len(keys) == 1:
+					if ord(keys) == 127: self.xbmc.Input.ExecuteAction({ 'action': 'back' }); continue
+					if ord(keys) == 8:   self.xbmc.Input.ExecuteAction({ 'action': 'back' });  continue
+					if ord(keys) == 10:  self.xbmc.Input.ExecuteAction({ 'action': 'select' }); continue
+					if ord(keys) == 9:  self.xbmc.Input.ExecuteAction({ 'action': 'fullscreen' }); continue
+					if ord(keys) == 27:  self.xbmc.Input.ExecuteAction({ 'action': 'previousmenu' }); continue
+
+					if keys == "+": self.xbmc.Input.ExecuteAction({ 'action': 'volumeup' }); continue
+					if keys == "-": self.xbmc.Input.ExecuteAction({ 'action': 'volumedown' }); continue
+					if keys == "*": self.xbmc.Input.ExecuteAction({ 'action': 'mute' }); continue
+
+					if keys == "P" or keys == "p": self.xbmc.Input.ExecuteAction({ 'action': 'pause' }); continue
+					if keys == "C" or keys == "c": self.xbmc.Input.ExecuteAction({ 'action': 'contextmenu' }); continue
+					if keys == "I" or keys == "i": self.xbmc.Input.ExecuteAction({ 'action': 'info' }); continue
+					if keys == "T" or keys == "t": self.xbmc.Input.ExecuteAction({ 'action': 'togglewatched' }); continue
+
+					if keys == "O" or keys == "o": self.xbmc.Input.ExecuteAction({ 'action': 'osd' }); continue
+					if keys == "M" or keys == "m": self.xbmc.Input.ExecuteAction({ 'action': 'osd' }); continue
+
+					if keys == ",": self.prev(); continue
+					if keys == ".": self.next(); continue
+
+					if keys == "S" or keys == "s":  
+						self.xbmc.wait = False
+						self.xbmc.GUI.ActivateWindow({ 'window': 'shutdownmenu' })
+						self.xbmc.wait = True
+						continue
+
+					self.xbmc.Input.SendText({ 'text': keys })
+
+				else:
+
+					if keys == '[A' or keys == '[B' or keys == '[C' or keys == '[D':
+
+						cs = self.xbmc.GUI.GetProperties({ 'properties': ['fullscreen'] })
+
+						if cs['fullscreen'] == True:
+							player = self._getCurrentPlayer()
+							print "Player: %s" % player
+							if keys == '[C':	self.xbmc.Player.Seek({ 'playerid': player['playerid'], 'value': { 'time': -30 } }); continue
+							if keys == '[D':	self.xbmc.Player.Seek({ 'playerid': player['playerid'], 'value': { 'time': 30 } }); continue
+
+						else:
+							if keys == '[A':	self.xbmc.Input.Up();    continue
+							if keys == '[B':	self.xbmc.Input.Down();  continue
+							if keys == '[C':	self.xbmc.Input.Right(); continue
+							if keys == '[D':	self.xbmc.Input.Left();  continue
+
+					print "Not sending keypress %s. Mapping does not exist." % keys
+
+		except KeyboardInterrupt:
+			None
 		
+		print "Leaving Keyboard Mode."
+		termios.tcsetattr(fd, termios.TCSAFLUSH, currentState)
+
+	def volume(self, volume = None):
+		" Read or set the XBMC volume "
+		if volume != None:
+			data = self.xbmc.Application.SetVolume({ 'volume': int(volume) })
+
 		data = self.xbmc.Application.GetProperties({ 'properties': [ 'volume', 'muted' ] })
 		muted = '' if data.get('muted') == False else 'Mute'
 		print 'Volume: %s %s' % ( data.get('volume'), muted )
 
-	def do_listplayers(self, s):
-		"""Usage: listplayers
-
-List currently active XBMC players
-"""
-		data = self.xbmc.Player.GetActivePlayers()
-		for p in data:
-			print " %1d: %s" % ( p["playerid"], p["type"] )
-
-	def do_playerproperties(self, s):
-		" get player properties "
-		data = self.xbmc.Player.GetProperties({ 'playerid': int(s), 'properties': [ ] })
-		print "%s" % data
-
-	def do_inspect(self, s):
-		" inspect data "
-		opt = { 'getdescriptions': True, 'getmetadata': True }
-		data = self.xbmc.JSONRPC.Introspect( opt )
-		args = s.split()
-		d = data
-
-		if s != "":
-			for a in args:
-				d = d[ a ]
-
-		if len(args) > 1:
-			for p in d:
-				print "  %-30s = %s" % ( p, d[p] )
-		else:
-			for p in d:
-				print "	 %s " % p
-		
-	def do_currentitem(self, s):
-		"""Usage: currentitem <player_id>
-
-Retrieve information on the currently active item on the specified player.
-"""
-		if s:
-			data = self.xbmc.Player.GetItem({ 'playerid': int(s), 'properties': [ 'albumartist', 'tvshowid', 'duration', 'album', 'season', 'albumid', 'track', 'imdbnumber', 'musicbrainztrackid', 'episode', 'showlink', 'showtitle', 'country', 'premiered', 'firstaired', 'tagline', 'artistid', 'mpaa' ] })
-		else:
-			self.do_help('currentitem')
-			return
-
-		item = data.get('item')
-		if item['type'] == 'picture':
-			print 'Type: %s' % item['type']
-			print 'Country: %s' % item['country']
-			print 'Label: %s' % item['label']
-
-		if item['type'] == 'episode':
-			print "ID: %s [%s] (%s)" % ( item['id'], item['tvshowid'], item['type'] )
-			print "Title: %s (Season %s)" % ( item['showtitle'], item['season'] )
-			print "Label: %s" % item['label']
-			print "Rating: %s" % item['mpaa']
-			print "First Aired: %s" % item['firstaired']
-			print "Tagline: %s" % item['tagline']
-			print "IMDB: %s" % item['imdbnumber']
-
-	def do_shutdown(self, s):
-		" shutdown XBMC "
-		self.xbmc.Application.Quit()
-
-	def do_mute(self, s):
-		" mute XBMC "
+	def mute(self):
+		" Mute XBMC
 		self.xbmc.Application.SetMute({ 'mute': True })
-		self.do_volume('')
+		return self.volume(None)
 
-	def do_unmute(self, s):
-		" unmute XBMC "
+	def unmute(self):
+		" Unmute XBMC
 		self.xbmc.Application.SetMute({ 'mute': False})
-		self.do_volume('')
+		return self.volume(None)
 
 
 def _setupLogger():
-	logger = logging.getLogger('xbmcremote')
+	logger = logging.getLogger('xbmcshell')
 	logger.setLevel(logging.INFO)
 	ch = logging.StreamHandler()
 	ch.setLevel(logging.INFO)
@@ -153,10 +387,9 @@ def _setupLogger():
 
 if __name__ == '__main__':
 	__PROGRAM_NAME__=sys.argv[0]
+	__PROGRAM_VER__='0.1a'
+
 	_setupLogger()
-#	plac.Interpreter( plac.call( xbmcShell ) ).interact()
 
-	shell = xbmcShell()
-	shell.cmdloop() 
-
+	plac.Interpreter( plac.call( xbmcShell ) ).interact()
 
